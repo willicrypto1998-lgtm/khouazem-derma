@@ -20,8 +20,9 @@ const firebaseConfig = {
 //  🔑 PASSWORDS
 // ══════════════════════════════════════════════════════════
 const PASSWORDS = {
-  doctor: "Khouazem2026",
-  nurse:  "Nurse2026",
+  khouazem:     "Khouazem2026",
+  benlamri:     "Benlamri2026",
+  consultation: "Consult2026",
 };
 
 // ══════════════════════════════════════════════════════════
@@ -30,16 +31,17 @@ const PASSWORDS = {
 const T = {
   en: {
     dir: "ltr",
-    appName: "Dr. Khouazem Cabinet",
-    appSub: "Dermatology · Boumerdès",
+    appName: "Dr Khouazem - Dr Benlamri",
+    appSub: "Dermatology · Boumerdes",
     login: "Secure Access",
-    doctor: "Doctor",
-    nurse: "Nurse",
+    khouazem: "Dr Khouazem",
+    benlamri: "Dr Benlamri",
+    consultation: "Consultation",
     password: "Password",
     connect: "Login →",
     wrongPwd: "Incorrect password. Please try again.",
-    accessDoctor: "Full access · Doctor",
-    accessNurse: "Queue access · Nurse",
+    accessKhouazem: "Full access · Dr Khouazem",
+    accessNurse: "Queue access · Consultation",
     logout: "⏻",
     waiting: "Waiting",
     inProgress: "In progress",
@@ -82,16 +84,17 @@ const T = {
   },
   ar: {
     dir: "rtl",
-    appName: "عيادة د. خوازم",
-    appSub: "طب الجلدية · بومرداس",
+    appName: "د. خوازم - د. بن العمري",
+    appSub: "عيادة طب الجلد بومرداس",
     login: "دخول آمن",
-    doctor: "الطبيب",
-    nurse: "الممرضة",
+    khouazem: "د. خوازم",
+    benlamri: "د. بن العمري",
+    consultation: "استشارة",
     password: "كلمة المرور",
     connect: "دخول ←",
     wrongPwd: "كلمة المرور غير صحيحة. حاول مرة أخرى.",
-    accessDoctor: "وصول كامل · طبيب",
-    accessNurse: "وصول قائمة الانتظار · ممرضة",
+    accessKhouazem: "وصول كامل · د. خوازم",
+    accessNurse: "وصول قائمة الانتظار · استشارة",
     logout: "⏻",
     waiting: "انتظار",
     inProgress: "قيد الفحص",
@@ -395,9 +398,9 @@ function LangBar({ lang, setLang }) {
 // ══════════════════════════════════════════════════════════
 function LoginScreen({ onLogin, lang, setLang }) {
   const t = T[lang];
-  const [role, setRole]     = useState("nurse");
-  const [pwd, setPwd]       = useState("");
-  const [error, setError]   = useState("");
+  const [role, setRole]   = useState("khouazem");
+  const [pwd, setPwd]     = useState("");
+  const [error, setError] = useState("");
 
   const handle = () => {
     if (pwd === PASSWORDS[role]) {
@@ -408,6 +411,12 @@ function LoginScreen({ onLogin, lang, setLang }) {
     }
   };
 
+  const roleLabel = () => {
+    if (role === "khouazem") return lang === "ar" ? "د. خوازم" : "Dr Khouazem";
+    if (role === "benlamri") return lang === "ar" ? "د. بن العمري" : "Dr Benlamri";
+    return lang === "ar" ? "استشارة" : "Consultation";
+  };
+
   return (
     <>
       <style>{S}</style>
@@ -415,25 +424,28 @@ function LoginScreen({ onLogin, lang, setLang }) {
       <div className="login-wrap" dir={t.dir}>
         <div className="login-box">
           <div className="login-logo">
-            <div className="login-icon">🏥</div>
+            <div className="login-icon">🩺</div>
             <div className="login-name">{t.appName}</div>
             <div className="login-sub">{t.appSub}</div>
           </div>
-          <div className="role-tabs">
-            <button className={`role-tab ${role === "doctor" ? "active" : ""}`} onClick={() => { setRole("doctor"); setError(""); setPwd(""); }}>
-              👨‍⚕️ {t.doctor}
+          <div className="role-tabs" style={{flexDirection:"column",gap:6}}>
+            <button className={`role-tab ${role === "khouazem" ? "active" : ""}`} onClick={() => { setRole("khouazem"); setError(""); setPwd(""); }}>
+              👨‍⚕️ {lang === "ar" ? "د. خوازم" : "Dr Khouazem"}
             </button>
-            <button className={`role-tab ${role === "nurse" ? "active" : ""}`} onClick={() => { setRole("nurse"); setError(""); setPwd(""); }}>
-              👩‍⚕️ {t.nurse}
+            <button className={`role-tab ${role === "benlamri" ? "active" : ""}`} onClick={() => { setRole("benlamri"); setError(""); setPwd(""); }}>
+              👨‍⚕️ {lang === "ar" ? "د. بن العمري" : "Dr Benlamri"}
+            </button>
+            <button className={`role-tab ${role === "consultation" ? "active" : ""}`} onClick={() => { setRole("consultation"); setError(""); setPwd(""); }}>
+              📋 {lang === "ar" ? "استشارة" : "Consultation"}
             </button>
           </div>
-          <div className="lfield">
+          <div className="lfield" style={{marginTop:14}}>
             <label>{t.password}</label>
             <input type="password" placeholder="••••••••••••" value={pwd} onChange={e => setPwd(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} autoFocus />
           </div>
           {error && <div className="login-error">{error}</div>}
           <button className="login-btn" onClick={handle}>{t.connect}</button>
-          <div className="login-hint">{role === "doctor" ? t.accessDoctor : t.accessNurse}</div>
+          <div className="login-hint">{roleLabel()}</div>
         </div>
       </div>
     </>
@@ -471,7 +483,7 @@ function NurseView({ role, onLogout, lang, setLang }) {
   const shareWA = (tk) => {
     const msg = lang === "ar"
       ? `السلام عليكم ${tk.name} 👋\n\nرقم دورك في عيادة *د. خوازم*:\n\n🎫 رقمك: *${tk.code}*\n\n📱 تابع دورك من هنا:\n${patientLink(tk.code)}\n\nشكراً 🙏`
-      : `Hello ${tk.name} 👋\n\nYour queue number at *Dr. Khouazem Cabinet*:\n\n🎫 Your number: *${tk.code}*\n\n📱 Track your turn here:\n${patientLink(tk.code)}\n\nThank you 🙏`;
+      : `Hello ${tk.name} 👋\n\nYour queue number at *Dr Khouazem - Dr Benlamri*:\n\n🎫 Your number: *${tk.code}*\n\n📱 Track your turn here:\n${patientLink(tk.code)}\n\nThank you 🙏`;
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
   };
 
@@ -491,10 +503,10 @@ function NurseView({ role, onLogout, lang, setLang }) {
       <div className={`shell ${t.dir === "rtl" ? "rtl" : ""}`} dir={t.dir}>
         <div className="topbar">
           <div className="topbar-left">
-            <div className="topbar-icon">🏥</div>
+            <div className="topbar-icon">🩺</div>
             <div>
               <div className="topbar-title">{t.appName}</div>
-              <div className="topbar-sub">{role === "doctor" ? t.doctor : t.nurse}</div>
+              <div className="topbar-sub">{role === "khouazem" ? (lang==="ar" ? "د. خوازم" : "Dr Khouazem") : role === "benlamri" ? (lang==="ar" ? "د. بن العمري" : "Dr Benlamri") : (lang==="ar" ? "استشارة" : "Consultation")}</div>
             </div>
           </div>
           <div className="topbar-right">
@@ -620,7 +632,7 @@ function PatientView({ initialCode, lang, setLang }) {
       <LangBar lang={lang} setLang={setLang} />
       <div className={`pt-shell ${t.dir === "rtl" ? "rtl" : ""}`} dir={t.dir}>
         <div className="pt-header">
-          <div className="pt-header-logo">🏥</div>
+          <div className="pt-header-logo">🩺</div>
           <div className="pt-header-name">{t.appName}</div>
           <div className="pt-header-sub">{t.appSub}</div>
         </div>
