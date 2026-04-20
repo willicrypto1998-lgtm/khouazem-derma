@@ -26,6 +26,37 @@ const PASSWORDS = {
 };
 
 // ══════════════════════════════════════════════════════════
+//  💾 SESSION — Remember login & visit time
+// ══════════════════════════════════════════════════════════
+const SESSION_KEY = "khouazem_session";
+const VISITTIME_KEY = "khouazem_visittime";
+
+function saveSession(role) {
+  localStorage.setItem(SESSION_KEY, role);
+}
+function loadSession() {
+  return localStorage.getItem(SESSION_KEY);
+}
+function clearSession() {
+  localStorage.removeItem(SESSION_KEY);
+}
+function saveVisitTime(mins) {
+  localStorage.setItem(VISITTIME_KEY, mins.toString());
+}
+function loadVisitTime() {
+  const v = localStorage.getItem(VISITTIME_KEY);
+  return v ? parseInt(v) : 15;
+}
+
+// Calculate estimated time for patient
+function calcEstimatedTime(position, visitTimeMins) {
+  const now = new Date();
+  const waitMs = (position - 1) * visitTimeMins * 60 * 1000;
+  const eta = new Date(now.getTime() + waitMs);
+  return eta.toLocaleTimeString("ar-DZ", { hour: "2-digit", minute: "2-digit" });
+}
+
+// ══════════════════════════════════════════════════════════
 //  🌍 TRANSLATIONS — AR + EN only
 // ══════════════════════════════════════════════════════════
 const T = {
@@ -81,6 +112,11 @@ const T = {
     autoUpdate: "Auto-updating in real time",
     enterAnotherCode: "← Enter another code",
     liveNow: "Live",
+    visitTime: "Visit duration (min)",
+    estimatedTime: "Estimated time",
+    saveTime: "Save",
+    approxWait: "Approx. wait",
+    mins: "min",
   },
   ar: {
     dir: "rtl",
@@ -134,6 +170,11 @@ const T = {
     autoUpdate: "تحديث تلقائي في الوقت الفعلي",
     enterAnotherCode: "← إدخال رمز آخر",
     liveNow: "مباشر",
+    visitTime: "مدة الزيارة (دقيقة)",
+    estimatedTime: "الوقت المتوقع",
+    saveTime: "حفظ",
+    approxWait: "وقت انتظار تقريبي",
+    mins: "د",
   }
 };
 
@@ -404,6 +445,7 @@ function LoginScreen({ onLogin, lang, setLang }) {
 
   const handle = () => {
     if (pwd === PASSWORDS[role]) {
+      saveSession(role);
       onLogin(role);
     } else {
       setError(t.wrongPwd);
@@ -461,6 +503,17 @@ function NurseView({ role, onLogout, lang, setLang }) {
   const [name, setName]       = useState("");
   const [last, setLast]       = useState(null);
   const [copied, setCopied]   = useState(false);
+  const [visitTime, setVisitTime] = useState(loadVisitTime());
+  const [timeInput, setTimeInput] = useState(loadVisitTime().toString());
+  const [timeSaved, setTimeSaved] = useState(false);
+
+  const saveTime = () => {
+    const v = parseInt(timeInput) || 15;
+    setVisitTime(v);
+    saveVisitTime(v);
+    setTimeSaved(true);
+    setTimeout(() => setTimeSaved(false), 2000);
+  };
 
   const waiting = queue.filter(q => q.status === "waiting");
   const called  = queue.find(q => q.status === "called");
@@ -555,6 +608,26 @@ function NurseView({ role, onLogout, lang, setLang }) {
             )}
           </div>
 
+          {/* Visit time setting */}
+          <div style={{background:"var(--teal-l)",borderRadius:10,padding:"12px 16px",margin:"10px 16px 0",display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:16}}>⏱️</span>
+            <div style={{flex:1}}>
+              <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".06em",color:"var(--teal-d)",marginBottom:4}}>{t.visitTime}</div>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <input
+                  type="number" min="1" max="120"
+                  value={timeInput}
+                  onChange={e => setTimeInput(e.target.value)}
+                  style={{width:70,padding:"6px 10px",borderRadius:8,border:"1.5px solid var(--teal)",background:"white",fontFamily:"'Tajawal',sans-serif",fontSize:15,fontWeight:700,color:"var(--teal-d)",outline:"none",textAlign:"center"}}
+                />
+                <span style={{fontSize:12,color:"var(--teal-d)",fontWeight:600}}>{t.mins}</span>
+                <button onClick={saveTime} style={{background:"var(--teal)",color:"white",border:"none",borderRadius:8,padding:"6px 14px",fontFamily:"'Tajawal',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                  {timeSaved ? "✓" : t.saveTime}
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div className="sec-label">{t.todayQueue} · {display.length} {t.tickets}</div>
           {display.length === 0 ? (
             <div className="q-empty">
@@ -568,7 +641,7 @@ function NurseView({ role, onLogout, lang, setLang }) {
               <div className="q-info">
                 <div className="q-name">{q.name}</div>
                 <div className={`q-meta ${q.status === "called" ? "mc" : ""}`}>
-                  {q.status === "waiting"  && `⏳ ${t.position} ${pos[q.id]}`}
+                  {q.status === "waiting"  && `⏳ ${t.position} ${pos[q.id]} · ~${calcEstimatedTime(pos[q.id], visitTime)}`}
                   {q.status === "called"   && t.inConsultation}
                   {q.status === "done"     && t.finished}
                   {q.status === "skipped"  && t.cancelled}
@@ -674,6 +747,12 @@ function PatientView({ initialCode, lang, setLang }) {
                     <span>{t.inQueueSuffix}</span>
                   </div>
                 )}
+                {info.position > 0 && (
+                  <div style={{background:"var(--teal-l)",borderRadius:12,padding:"12px 20px",textAlign:"center",marginBottom:12,border:"1px solid var(--teal)"}}>
+                    <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:".08em",color:"var(--teal-d)",fontWeight:700,marginBottom:4}}>⏱️ {t.estimatedTime}</div>
+                    <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:700,color:"var(--teal-d)"}}>{calcEstimatedTime(info.position, loadVisitTime())}</div>
+                  </div>
+                )}
               </>
             )}
 
@@ -713,12 +792,18 @@ export default function App() {
   const langParam   = params.get("lang") || "ar";
 
   const [lang, setLang] = useState(langParam);
-  const [role, setRole] = useState(null);
+  // ✅ Auto-login from saved session
+  const [role, setRole] = useState(() => loadSession());
 
   // Update body class for font
   useEffect(() => {
     document.body.className = lang;
   }, [lang]);
+
+  const handleLogout = () => {
+    clearSession();
+    setRole(null);
+  };
 
   // ✅ If patient link → ONLY show patient view, NO login, NO dashboard access
   if (ticketParam) {
@@ -730,6 +815,6 @@ export default function App() {
     return <LoginScreen onLogin={setRole} lang={lang} setLang={setLang} />;
   }
 
-  // Logged in → dashboard
-  return <NurseView role={role} onLogout={() => setRole(null)} lang={lang} setLang={setLang} />;
+  // Logged in → dashboard (session saved, no need to re-login)
+  return <NurseView role={role} onLogout={handleLogout} lang={lang} setLang={setLang} />;
 }
