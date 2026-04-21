@@ -62,10 +62,11 @@ function saveAdminConfig(config) {
 // ══════════════════════════════════════════════════════════
 const BIO_KEY = "khouazem_bio_";
 
+/* eslint-disable no-undef */
 async function isBiometricAvailable() {
   try {
-    return window.PublicKeyCredential &&
-      await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+    return !!window.PublicKeyCredential &&
+      await window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
   } catch(e) { return false; }
 }
 
@@ -73,7 +74,7 @@ async function registerBiometric(roleId) {
   try {
     const cred = await navigator.credentials.create({
       publicKey: {
-        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        challenge: window.crypto.getRandomValues(new Uint8Array(32)),
         rp: { name: "Cabinet Khouazem", id: window.location.hostname },
         user: {
           id: new TextEncoder().encode(roleId),
@@ -103,7 +104,7 @@ async function verifyBiometric(roleId) {
     const rawId = Uint8Array.from(atob(stored), c => c.charCodeAt(0));
     const assertion = await navigator.credentials.get({
       publicKey: {
-        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        challenge: window.crypto.getRandomValues(new Uint8Array(32)),
         allowCredentials: [{ id: rawId, type: "public-key" }],
         userVerification: "required",
         timeout: 60000,
