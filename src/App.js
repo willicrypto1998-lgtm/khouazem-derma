@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, push, set, onValue, update, get } from "firebase/database";
@@ -17,13 +16,107 @@ const firebaseConfig = {
 };
 
 // ══════════════════════════════════════════════════════════
-//  🔑 PASSWORDS
+//  🔑 PASSWORDS — loaded dynamically from admin config
 // ══════════════════════════════════════════════════════════
-const PASSWORDS = {
-  khouazem:     "Khouazem2026",
-  benlamri:     "Benlamri2026",
-  consultation: "Consult2026",
-};
+function checkPassword(roleId, pwd) {
+  const config = loadAdminConfig();
+  const doctor = config.doctors.find(d => d.id === roleId);
+  return doctor && doctor.pwd === pwd;
+}
+
+function getDoctors() {
+  return loadAdminConfig().doctors;
+}
+
+function getVisitTimeForRole(roleId) {
+  const config = loadAdminConfig();
+  const doctor = config.doctors.find(d => d.id === roleId);
+  return doctor ? doctor.visitTime : 15;
+}
+
+// ══════════════════════════════════════════════════════════
+//  ⚙️ ADMIN CONFIG (managed by Dr Khouazem only)
+// ══════════════════════════════════════════════════════════
+const ADMIN_CONFIG_KEY = "khouazem_admin_config";
+
+function loadAdminConfig() {
+  try {
+    const saved = localStorage.getItem(ADMIN_CONFIG_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch(e) {}
+  return {
+    doctors: [
+      { id: "khouazem",     name: "Dr Khouazem",    nameAr: "د. خوازم",      pwd: "Khouazem2026", visitTime: 15, isAdmin: true  },
+      { id: "benlamri",     name: "Dr Benlamri",     nameAr: "د. بن العمري",  pwd: "Benlamri2026", visitTime: 15, isAdmin: false },
+      { id: "consultation", name: "Consultation",    nameAr: "استشارة",       pwd: "Consult2026",  visitTime: 10, isAdmin: false },
+    ]
+  };
+}
+
+function saveAdminConfig(config) {
+  localStorage.setItem(ADMIN_CONFIG_KEY, JSON.stringify(config));
+}
+
+// ══════════════════════════════════════════════════════════
+//  🔐 BIOMETRIC — WebAuthn fingerprint / Face ID
+// ══════════════════════════════════════════════════════════
+const BIO_KEY = "khouazem_bio_";
+
+async function isBiometricAvailable() {
+  try {
+    return window.PublicKeyCredential &&
+      await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  } catch(e) { return false; }
+}
+
+async function registerBiometric(roleId) {
+  try {
+    const cred = await navigator.credentials.create({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name: "Cabinet Khouazem", id: window.location.hostname },
+        user: {
+          id: new TextEncoder().encode(roleId),
+          name: roleId,
+          displayName: roleId,
+        },
+        pubKeyCredParams: [{ alg: -7, type: "public-key" }],
+        authenticatorSelection: {
+          authenticatorAttachment: "platform",
+          userVerification: "required",
+        },
+        timeout: 60000,
+      }
+    });
+    if (cred) {
+      localStorage.setItem(BIO_KEY + roleId, btoa(String.fromCharCode(...new Uint8Array(cred.rawId))));
+      return true;
+    }
+  } catch(e) { console.log("Bio register error:", e); }
+  return false;
+}
+
+async function verifyBiometric(roleId) {
+  try {
+    const stored = localStorage.getItem(BIO_KEY + roleId);
+    if (!stored) return false;
+    const rawId = Uint8Array.from(atob(stored), c => c.charCodeAt(0));
+    const assertion = await navigator.credentials.get({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        allowCredentials: [{ id: rawId, type: "public-key" }],
+        userVerification: "required",
+        timeout: 60000,
+      }
+    });
+    return !!assertion;
+  } catch(e) { console.log("Bio verify error:", e); }
+  return false;
+}
+
+function hasBiometricRegistered(roleId) {
+  return !!localStorage.getItem(BIO_KEY + roleId);
+}
 
 // ══════════════════════════════════════════════════════════
 //  💾 SESSION — Remember login & visit time
@@ -439,25 +532,57 @@ function LangBar({ lang, setLang }) {
 // ══════════════════════════════════════════════════════════
 function LoginScreen({ onLogin, lang, setLang }) {
   const t = T[lang];
-  const [role, setRole]   = useState("khouazem");
-  const [pwd, setPwd]     = useState("");
-  const [error, setError] = useState("");
+  const doctors = getDoctors();
+  const [role, setRole]       = useState(doctors[0]?.id || "khouazem");
+  const [pwd, setPwd]         = useState("");
+  const [error, setError]     = useState("");
+  const [bioAvail, setBioAvail] = useState(false);
+  const [bioLoading, setBioLoading] = useState(false);
+  const [showRegBio, setShowRegBio] = useState(false);
 
-  const handle = () => {
-    if (pwd === PASSWORDS[role]) {
+  useEffect(() => {
+    isBiometricAvailable().then(setBioAvail);
+  }, []);
+
+  const handleLogin = () => {
+    if (checkPassword(role, pwd)) {
       saveSession(role);
       onLogin(role);
     } else {
-      setError(t.wrongPwd);
+      setError(lang === "ar" ? "كلمة المرور غير صحيحة" : "Incorrect password.");
       setPwd("");
     }
   };
 
-  const roleLabel = () => {
-    if (role === "khouazem") return lang === "ar" ? "د. خوازم" : "Dr Khouazem";
-    if (role === "benlamri") return lang === "ar" ? "د. بن العمري" : "Dr Benlamri";
-    return lang === "ar" ? "استشارة" : "Consultation";
+  const handleBiometric = async () => {
+    setBioLoading(true);
+    setError("");
+    const ok = await verifyBiometric(role);
+    if (ok) {
+      saveSession(role);
+      onLogin(role);
+    } else {
+      setError(lang === "ar" ? "فشل التحقق البيومتري" : "Biometric failed. Use password.");
+    }
+    setBioLoading(false);
   };
+
+  const handleRegisterBio = async () => {
+    setBioLoading(true);
+    const ok = await registerBiometric(role);
+    if (ok) {
+      setShowRegBio(false);
+      setError("");
+      alert(lang === "ar" ? "تم تسجيل البصمة بنجاح!" : "Biometric registered successfully!");
+    } else {
+      setError(lang === "ar" ? "فشل تسجيل البصمة" : "Biometric registration failed.");
+    }
+    setBioLoading(false);
+  };
+
+  const currentDoc = doctors.find(d => d.id === role);
+  const docName = currentDoc ? (lang === "ar" ? currentDoc.nameAr : currentDoc.name) : "";
+  const bioRegistered = hasBiometricRegistered(role);
 
   return (
     <>
@@ -470,27 +595,240 @@ function LoginScreen({ onLogin, lang, setLang }) {
             <div className="login-name">{t.appName}</div>
             <div className="login-sub">{t.appSub}</div>
           </div>
-          <div className="role-tabs" style={{flexDirection:"column",gap:6}}>
-            <button className={`role-tab ${role === "khouazem" ? "active" : ""}`} onClick={() => { setRole("khouazem"); setError(""); setPwd(""); }}>
-              👨‍⚕️ {lang === "ar" ? "د. خوازم" : "Dr Khouazem"}
-            </button>
-            <button className={`role-tab ${role === "benlamri" ? "active" : ""}`} onClick={() => { setRole("benlamri"); setError(""); setPwd(""); }}>
-              👨‍⚕️ {lang === "ar" ? "د. بن العمري" : "Dr Benlamri"}
-            </button>
-            <button className={`role-tab ${role === "consultation" ? "active" : ""}`} onClick={() => { setRole("consultation"); setError(""); setPwd(""); }}>
-              📋 {lang === "ar" ? "استشارة" : "Consultation"}
-            </button>
+
+          {/* Doctor selection */}
+          <div className="role-tabs" style={{flexDirection:"column",gap:6,marginBottom:16}}>
+            {doctors.map(doc => (
+              <button key={doc.id}
+                className={`role-tab ${role === doc.id ? "active" : ""}`}
+                onClick={() => { setRole(doc.id); setError(""); setPwd(""); setShowRegBio(false); }}>
+                👨‍⚕️ {lang === "ar" ? doc.nameAr : doc.name}
+              </button>
+            ))}
           </div>
-          <div className="lfield" style={{marginTop:14}}>
+
+          {/* Biometric button if registered */}
+          {bioAvail && bioRegistered && (
+            <button
+              onClick={handleBiometric}
+              disabled={bioLoading}
+              style={{
+                width:"100%", padding:"13px", borderRadius:"100px",
+                border:"2px solid var(--teal)", background:"white",
+                color:"var(--teal)", fontFamily:"'Tajawal',sans-serif",
+                fontSize:14, fontWeight:700, cursor:"pointer",
+                marginBottom:12, display:"flex", alignItems:"center",
+                justifyContent:"center", gap:8,
+                opacity: bioLoading ? .6 : 1
+              }}>
+              {bioLoading ? "..." : (lang === "ar" ? "🔐 دخول بالبصمة / الوجه" : "🔐 Login with Fingerprint / Face ID")}
+            </button>
+          )}
+
+          {/* Password field */}
+          <div className="lfield">
             <label>{t.password}</label>
-            <input type="password" placeholder="••••••••••••" value={pwd} onChange={e => setPwd(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} autoFocus />
+            <input type="password" placeholder="••••••••••••" value={pwd}
+              onChange={e => setPwd(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleLogin()} autoFocus />
           </div>
+
           {error && <div className="login-error">{error}</div>}
-          <button className="login-btn" onClick={handle}>{t.connect}</button>
-          <div className="login-hint">{roleLabel()}</div>
+
+          <button className="login-btn" onClick={handleLogin}>{t.connect}</button>
+
+          {/* Register biometric after successful password */}
+          {bioAvail && !bioRegistered && (
+            <button onClick={() => setShowRegBio(!showRegBio)}
+              style={{width:"100%",marginTop:10,padding:"10px",border:"none",background:"transparent",color:"var(--soft)",fontSize:12,cursor:"pointer",fontFamily:"'Tajawal',sans-serif"}}>
+              {lang === "ar" ? "⚙️ تسجيل البصمة لهذا الجهاز" : "⚙️ Register fingerprint for this device"}
+            </button>
+          )}
+
+          {showRegBio && (
+            <div style={{background:"var(--teal-l)",borderRadius:10,padding:14,marginTop:8,textAlign:"center"}}>
+              <div style={{fontSize:12,color:"var(--teal-d)",marginBottom:10}}>
+                {lang === "ar"
+                  ? `أدخل كلمة المرور أولاً ثم سجّل بصمتك`
+                  : `Enter your password first, then register your biometric`}
+              </div>
+              <button onClick={async () => {
+                if (!checkPassword(role, pwd)) {
+                  setError(lang === "ar" ? "أدخل كلمة المرور أولاً" : "Enter password first");
+                  return;
+                }
+                await handleRegisterBio();
+              }} disabled={bioLoading}
+                style={{background:"var(--teal)",color:"white",border:"none",borderRadius:8,padding:"10px 20px",fontFamily:"'Tajawal',sans-serif",fontSize:13,fontWeight:700,cursor:"pointer"}}>
+                {lang === "ar" ? "🔐 تسجيل البصمة" : "🔐 Register Biometric"}
+              </button>
+            </div>
+          )}
+
+          <div style={{fontSize:11,color:"var(--soft)",textAlign:"center",marginTop:12}}>{docName}</div>
         </div>
       </div>
     </>
+  );
+}
+
+
+// ══════════════════════════════════════════════════════════
+//  ⚙️ ADMIN PANEL — Only Dr Khouazem
+// ══════════════════════════════════════════════════════════
+function AdminPanel({ lang, onClose }) {
+  const [config, setConfig] = useState(loadAdminConfig());
+  const [saved, setSaved]   = useState(false);
+  const [newDoc, setNewDoc] = useState({ name:"", nameAr:"", pwd:"", visitTime:15 });
+  const [showAdd, setShowAdd] = useState(false);
+
+  const saveAll = () => {
+    saveAdminConfig(config);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const updateDoctor = (idx, field, val) => {
+    const docs = [...config.doctors];
+    docs[idx] = { ...docs[idx], [field]: field === "visitTime" ? parseInt(val)||15 : val };
+    setConfig({ ...config, doctors: docs });
+  };
+
+  const removeDoctor = (idx) => {
+    if (config.doctors[idx].isAdmin) return;
+    const docs = config.doctors.filter((_, i) => i !== idx);
+    setConfig({ ...config, doctors: docs });
+  };
+
+  const addDoctor = () => {
+    if (!newDoc.name || !newDoc.pwd) return;
+    const id = newDoc.name.toLowerCase().replace(/\s+/g, "_") + "_" + Date.now();
+    const docs = [...config.doctors, { ...newDoc, id, isAdmin: false }];
+    setConfig({ ...config, doctors: docs });
+    setNewDoc({ name:"", nameAr:"", pwd:"", visitTime:15 });
+    setShowAdd(false);
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:500,background:"rgba(0,0,0,.6)",display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={onClose}>
+      <div style={{background:"white",borderRadius:"20px 20px 0 0",width:"100%",maxWidth:480,maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+        {/* Header */}
+        <div style={{background:"linear-gradient(135deg,var(--teal-d),var(--teal))",padding:"18px 20px",color:"white",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,fontWeight:700}}>
+              {lang==="ar" ? "⚙️ لوحة الإدارة" : "⚙️ Admin Panel"}
+            </div>
+            <div style={{fontSize:11,opacity:.7,marginTop:2}}>
+              {lang==="ar" ? "د. خوازم فقط" : "Dr Khouazem only"}
+            </div>
+          </div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,.2)",border:"none",color:"white",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:14}}>✕</button>
+        </div>
+
+        {/* Body */}
+        <div style={{flex:1,overflow:"auto",padding:20}} dir={lang==="ar"?"rtl":"ltr"}>
+
+          {/* Doctors list */}
+          <div style={{fontSize:12,fontWeight:700,textTransform:"uppercase",letterSpacing:".08em",color:"var(--soft)",marginBottom:12}}>
+            {lang==="ar" ? "قائمة الأطباء والموظفين" : "Doctors & Staff"}
+          </div>
+
+          {config.doctors.map((doc, idx) => (
+            <div key={doc.id} style={{background:"var(--cream)",borderRadius:10,padding:14,marginBottom:10,border:"1px solid var(--sand)"}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                <div style={{fontWeight:700,fontSize:14}}>
+                  {doc.isAdmin ? "👑 " : "👨‍⚕️ "}{lang==="ar" ? doc.nameAr : doc.name}
+                </div>
+                {!doc.isAdmin && (
+                  <button onClick={() => removeDoctor(idx)}
+                    style={{background:"var(--red-bg)",color:"var(--red)",border:"none",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer"}}>
+                    {lang==="ar" ? "حذف" : "Delete"}
+                  </button>
+                )}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <div>
+                  <label style={{fontSize:10,fontWeight:700,color:"var(--soft)",textTransform:"uppercase",display:"block",marginBottom:4}}>
+                    {lang==="ar" ? "الاسم (EN)" : "Name (EN)"}
+                  </label>
+                  <input value={doc.name} onChange={e=>updateDoctor(idx,"name",e.target.value)}
+                    style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid var(--sand)",background:"white",fontFamily:"'Tajawal',sans-serif",fontSize:13,outline:"none"}}/>
+                </div>
+                <div>
+                  <label style={{fontSize:10,fontWeight:700,color:"var(--soft)",textTransform:"uppercase",display:"block",marginBottom:4}}>
+                    {lang==="ar" ? "الاسم (AR)" : "Name (AR)"}
+                  </label>
+                  <input value={doc.nameAr} onChange={e=>updateDoctor(idx,"nameAr",e.target.value)}
+                    dir="rtl"
+                    style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid var(--sand)",background:"white",fontFamily:"'Tajawal',sans-serif",fontSize:13,outline:"none",textAlign:"right"}}/>
+                </div>
+                <div>
+                  <label style={{fontSize:10,fontWeight:700,color:"var(--soft)",textTransform:"uppercase",display:"block",marginBottom:4}}>
+                    {lang==="ar" ? "كلمة المرور" : "Password"}
+                  </label>
+                  <input type="text" value={doc.pwd} onChange={e=>updateDoctor(idx,"pwd",e.target.value)}
+                    style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid var(--sand)",background:"white",fontFamily:"'Tajawal',sans-serif",fontSize:13,outline:"none"}}/>
+                </div>
+                <div>
+                  <label style={{fontSize:10,fontWeight:700,color:"var(--soft)",textTransform:"uppercase",display:"block",marginBottom:4}}>
+                    ⏱️ {lang==="ar" ? "مدة الزيارة (د)" : "Visit time (min)"}
+                  </label>
+                  <input type="number" min="1" max="120" value={doc.visitTime} onChange={e=>updateDoctor(idx,"visitTime",e.target.value)}
+                    style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid var(--sand)",background:"white",fontFamily:"'Tajawal',sans-serif",fontSize:13,outline:"none",textAlign:"center"}}/>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {/* Add doctor */}
+          {!showAdd ? (
+            <button onClick={() => setShowAdd(true)}
+              style={{width:"100%",padding:12,borderRadius:10,border:"2px dashed var(--teal)",background:"var(--teal-l)",color:"var(--teal-d)",fontFamily:"'Tajawal',sans-serif",fontSize:13,fontWeight:700,cursor:"pointer",marginBottom:16}}>
+              + {lang==="ar" ? "إضافة طبيب / موظف" : "Add Doctor / Staff"}
+            </button>
+          ) : (
+            <div style={{background:"var(--teal-l)",borderRadius:10,padding:14,marginBottom:16,border:"1.5px solid var(--teal)"}}>
+              <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:"var(--teal-d)"}}>
+                {lang==="ar" ? "إضافة جديد" : "Add New"}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                {[
+                  ["name", lang==="ar"?"الاسم (EN)":"Name (EN)", "Dr Smith"],
+                  ["nameAr", lang==="ar"?"الاسم (AR)":"Name (AR)", "د. سميث"],
+                  ["pwd", lang==="ar"?"كلمة المرور":"Password", "Password123"],
+                  ["visitTime", lang==="ar"?"مدة الزيارة":"Visit time", "15"],
+                ].map(([field, label, ph]) => (
+                  <div key={field}>
+                    <label style={{fontSize:10,fontWeight:700,color:"var(--soft)",textTransform:"uppercase",display:"block",marginBottom:4}}>{label}</label>
+                    <input value={newDoc[field]} onChange={e=>setNewDoc({...newDoc,[field]:e.target.value})}
+                      placeholder={ph} type={field==="visitTime"?"number":"text"}
+                      style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid var(--sand)",background:"white",fontFamily:"'Tajawal',sans-serif",fontSize:13,outline:"none"}}/>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={addDoctor}
+                  style={{flex:1,padding:10,borderRadius:8,border:"none",background:"var(--teal)",color:"white",fontFamily:"'Tajawal',sans-serif",fontSize:13,fontWeight:700,cursor:"pointer"}}>
+                  {lang==="ar" ? "إضافة" : "Add"}
+                </button>
+                <button onClick={() => setShowAdd(false)}
+                  style={{flex:1,padding:10,borderRadius:8,border:"1.5px solid var(--sand)",background:"white",color:"var(--soft)",fontFamily:"'Tajawal',sans-serif",fontSize:13,cursor:"pointer"}}>
+                  {lang==="ar" ? "إلغاء" : "Cancel"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{padding:"14px 20px",borderTop:"1px solid var(--sand)",background:"var(--cream)"}}>
+          <button onClick={saveAll}
+            style={{width:"100%",padding:14,borderRadius:100,border:"none",background:saved?"var(--green)":"var(--teal)",color:"white",fontFamily:"'Tajawal',sans-serif",fontSize:15,fontWeight:700,cursor:"pointer",transition:"background .3s"}}>
+            {saved ? (lang==="ar" ? "✓ تم الحفظ!" : "✓ Saved!") : (lang==="ar" ? "💾 حفظ التغييرات" : "💾 Save Changes")}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -503,14 +841,18 @@ function NurseView({ role, onLogout, lang, setLang }) {
   const [name, setName]       = useState("");
   const [last, setLast]       = useState(null);
   const [copied, setCopied]   = useState(false);
-  const [visitTime, setVisitTime] = useState(loadVisitTime());
-  const [timeInput, setTimeInput] = useState(loadVisitTime().toString());
+  const [visitTime, setVisitTime] = useState(getVisitTimeForRole(role));
+  const [timeInput, setTimeInput] = useState(getVisitTimeForRole(role).toString());
   const [timeSaved, setTimeSaved] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
 
   const saveTime = () => {
     const v = parseInt(timeInput) || 15;
     setVisitTime(v);
-    saveVisitTime(v);
+    // Save per-role visit time in admin config
+    const config = loadAdminConfig();
+    const idx = config.doctors.findIndex(d => d.id === role);
+    if (idx >= 0) { config.doctors[idx].visitTime = v; saveAdminConfig(config); }
     setTimeSaved(true);
     setTimeout(() => setTimeSaved(false), 2000);
   };
@@ -553,6 +895,7 @@ function NurseView({ role, onLogout, lang, setLang }) {
     <>
       <style>{S}</style>
       <LangBar lang={lang} setLang={setLang} />
+      {showAdmin && <AdminPanel lang={lang} onClose={() => setShowAdmin(false)} />}
       <div className={`shell ${t.dir === "rtl" ? "rtl" : ""}`} dir={t.dir}>
         <div className="topbar">
           <div className="topbar-left">
@@ -567,6 +910,12 @@ function NurseView({ role, onLogout, lang, setLang }) {
               <span className="live-dot"/>
               {waiting.length} {t.waiting}
             </div>
+                      {role === "khouazem" && (
+              <button onClick={() => setShowAdmin(true)}
+                style={{background:"rgba(255,255,255,.15)",border:"none",color:"white",borderRadius:8,padding:"6px 10px",fontSize:14,cursor:"pointer",marginRight:4}}>
+                ⚙️
+              </button>
+            )}
             <button className="logout-btn" onClick={onLogout}>{t.logout}</button>
           </div>
         </div>
