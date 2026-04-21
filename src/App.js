@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { useState, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, push, set, onValue, update, get } from "firebase/database";
@@ -133,9 +134,6 @@ function loadSession() {
 }
 function clearSession() {
   localStorage.removeItem(SESSION_KEY);
-}
-function saveVisitTime(mins) {
-  localStorage.setItem(VISITTIME_KEY, mins.toString());
 }
 function loadVisitTime() {
   const v = localStorage.getItem(VISITTIME_KEY);
