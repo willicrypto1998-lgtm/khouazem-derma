@@ -204,6 +204,7 @@ const T = {
     autoUpdate: "Auto-updating in real time",
     enterAnotherCode: "← Enter another code",
     liveNow: "Live",
+    addDelay: "Extend time",
     visitTime: "Visit duration (min)",
     estimatedTime: "Estimated time",
     saveTime: "Save",
@@ -262,6 +263,7 @@ const T = {
     autoUpdate: "تحديث تلقائي في الوقت الفعلي",
     enterAnotherCode: "← إدخال رمز آخر",
     liveNow: "مباشر",
+    addDelay: "تمديد الوقت",
     visitTime: "مدة الزيارة (دقيقة)",
     estimatedTime: "الوقت المتوقع",
     saveTime: "حفظ",
@@ -326,6 +328,39 @@ async function apiUpdate(id, data) {
     return;
   }
   await update(ref(db, `days/${todayKey()}/queue/${id}`), data);
+}
+
+// Add delay to currently called patient (in minutes)
+async function apiAddDelay(id, extraMins, queue) {
+  const t = queue.find(q => q.id === id);
+  if (!t) return;
+  const currentDelay = t.extraDelay || 0;
+  const newDelay = currentDelay + extraMins;
+  await apiUpdate(id, { extraDelay: newDelay, delayStartTime: t.delayStartTime || Date.now() });
+}
+
+// Real-time estimated time calculation
+function calcRealTime(position, visitTimeMins, calledTicket) {
+  const now = Date.now();
+  let remainingForCurrent = visitTimeMins * 60 * 1000; // default
+
+  if (calledTicket) {
+    const startTime = calledTicket.delayStartTime || now;
+    const extraMs = (calledTicket.extraDelay || 0) * 60 * 1000;
+    const elapsed = now - startTime;
+    const totalDuration = visitTimeMins * 60 * 1000 + extraMs;
+    remainingForCurrent = Math.max(0, totalDuration - elapsed);
+  }
+
+  // position 1 = next after current
+  const waitMs = remainingForCurrent + (position - 1) * visitTimeMins * 60 * 1000;
+  const eta = new Date(now + waitMs);
+  return eta.toLocaleTimeString("ar-DZ", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDelay(extraMins) {
+  if (!extraMins) return "";
+  return `+${extraMins} min`;
 }
 
 async function apiCallNext(queue) {
@@ -923,10 +958,24 @@ function NurseView({ role, onLogout, lang, setLang }) {
           <div className="called-banner">
             <span className="cb-icon">🔔</span>
             <div className="cb-info">
-              <div className="cb-label">{t.inProgress}</div>
+              <div className="cb-label">{t.inProgress} {called.extraDelay ? <span style={{background:"var(--red)",color:"white",borderRadius:100,padding:"1px 8px",fontSize:10,marginLeft:4}}>+{called.extraDelay} min</span> : null}</div>
               <div className="cb-patient">N° {called.code} — {called.name}</div>
+              <div style={{display:"flex",gap:6,marginTop:8}}>
+                <button onClick={() => apiAddDelay(called.id, 5, queue)}
+                  style={{background:"var(--amber)",color:"white",border:"none",borderRadius:8,padding:"5px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Tajawal',sans-serif"}}>
+                  {lang==="ar" ? "+5 دقائق" : "+5 min"}
+                </button>
+                <button onClick={() => apiAddDelay(called.id, 10, queue)}
+                  style={{background:"var(--amber)",color:"white",border:"none",borderRadius:8,padding:"5px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Tajawal',sans-serif"}}>
+                  {lang==="ar" ? "+10 دقائق" : "+10 min"}
+                </button>
+                <button onClick={() => apiAddDelay(called.id, 15, queue)}
+                  style={{background:"var(--red)",color:"white",border:"none",borderRadius:8,padding:"5px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Tajawal',sans-serif"}}>
+                  {lang==="ar" ? "+15 دقائق" : "+15 min"}
+                </button>
+              </div>
             </div>
-            <button className="cb-btn" onClick={() => apiUpdate(called.id, { status: "done" })}>✓ {t.done}</button>
+            <button className="cb-btn" onClick={() => apiUpdate(called.id, { status: "done", extraDelay: 0 })}>✓ {t.done}</button>
           </div>
         )}
 
@@ -989,7 +1038,7 @@ function NurseView({ role, onLogout, lang, setLang }) {
               <div className="q-info">
                 <div className="q-name">{q.name}</div>
                 <div className={`q-meta ${q.status === "called" ? "mc" : ""}`}>
-                  {q.status === "waiting"  && `⏳ ${t.position} ${pos[q.id]} · ~${calcEstimatedTime(pos[q.id], visitTime)}`}
+                  {q.status === "waiting"  && `⏳ ${t.position} ${pos[q.id]} · ~${calcRealTime(pos[q.id], visitTime, called)}`}
                   {q.status === "called"   && t.inConsultation}
                   {q.status === "done"     && t.finished}
                   {q.status === "skipped"  && t.cancelled}
@@ -1023,6 +1072,13 @@ function PatientView({ initialCode, lang, setLang }) {
   const [code, setCode]   = useState(initialCode || "");
   const [info, setInfo]   = useState(null);
   const [error, setError] = useState("");
+  const [, setTick] = useState(0); // force re-render every minute for live ETA
+
+  // Auto-refresh every 60 seconds to update ETA in real time
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (!code) return;
@@ -1098,7 +1154,12 @@ function PatientView({ initialCode, lang, setLang }) {
                 {info.position > 0 && (
                   <div style={{background:"var(--teal-l)",borderRadius:12,padding:"12px 20px",textAlign:"center",marginBottom:12,border:"1px solid var(--teal)"}}>
                     <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:".08em",color:"var(--teal-d)",fontWeight:700,marginBottom:4}}>⏱️ {t.estimatedTime}</div>
-                    <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:700,color:"var(--teal-d)"}}>{calcEstimatedTime(info.position, loadVisitTime())}</div>
+                    <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:32,fontWeight:700,color:"var(--teal-d)"}} id="eta-display">
+                      {calcRealTime(info.position, loadVisitTime(), queue.find(q => q.status === "called"))}
+                    </div>
+                    <div style={{fontSize:10,color:"var(--teal-d)",opacity:.6,marginTop:4}}>
+                      {lang==="ar" ? "🔴 مباشر · يتحدث كل دقيقة" : "🔴 Live · Updates every minute"}
+                    </div>
                   </div>
                 )}
               </>
