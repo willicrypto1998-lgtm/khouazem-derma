@@ -36,70 +36,6 @@ function getVisitTimeForRole(roleId) {
 }
 
 // ══════════════════════════════════════════════════════════
-//  🔊 SOUND NOTIFICATION
-// ══════════════════════════════════════════════════════════
-function playCallSound() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const playBeep = (freq, start, dur) => {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.connect(g); g.connect(ctx.destination);
-      o.frequency.value = freq;
-      o.type = "sine";
-      g.gain.setValueAtTime(0, ctx.currentTime + start);
-      g.gain.linearRampToValueAtTime(0.3, ctx.currentTime + start + 0.01);
-      g.gain.linearRampToValueAtTime(0, ctx.currentTime + start + dur);
-      o.start(ctx.currentTime + start);
-      o.stop(ctx.currentTime + start + dur + 0.1);
-    };
-    playBeep(880, 0, 0.15);
-    playBeep(1100, 0.2, 0.15);
-    playBeep(1320, 0.4, 0.3);
-  } catch(e) {}
-}
-
-// ══════════════════════════════════════════════════════════
-//  📳 HAPTIC FEEDBACK
-// ══════════════════════════════════════════════════════════
-function haptic(type = "light") {
-  if (!navigator.vibrate) return;
-  if (type === "light") navigator.vibrate(50);
-  if (type === "medium") navigator.vibrate([50, 30, 50]);
-  if (type === "heavy") navigator.vibrate([100, 50, 100, 50, 200]);
-}
-
-// ══════════════════════════════════════════════════════════
-//  💡 WAKE LOCK (screen stays on for staff)
-// ══════════════════════════════════════════════════════════
-let wakeLock = null;
-async function requestWakeLock() {
-  try {
-    if ("wakeLock" in navigator) {
-      wakeLock = await navigator.wakeLock.request("screen");
-    }
-  } catch(e) {}
-}
-async function releaseWakeLock() {
-  try { if (wakeLock) { await wakeLock.release(); wakeLock = null; } } catch(e) {}
-}
-
-// ══════════════════════════════════════════════════════════
-//  🌐 NETWORK STATUS
-// ══════════════════════════════════════════════════════════
-function useNetworkStatus() {
-  const [online, setOnline] = useState(navigator.onLine);
-  useEffect(() => {
-    const on  = () => setOnline(true);
-    const off = () => setOnline(false);
-    window.addEventListener("online", on);
-    window.addEventListener("offline", off);
-    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
-  }, []);
-  return online;
-}
-
-// ══════════════════════════════════════════════════════════
 //  ⚙️ ADMIN CONFIG (managed by Dr Khouazem only)
 // ══════════════════════════════════════════════════════════
 const ADMIN_CONFIG_KEY = "khouazem_admin_config";
@@ -429,13 +365,9 @@ function formatDelay(extraMins) {
 
 async function apiCallNext(queue) {
   const cur = queue.find(t => t.status === "called");
-  if (cur) await apiUpdate(cur.id, { status: "done", extraDelay: 0 });
+  if (cur) await apiUpdate(cur.id, { status: "done" });
   const next = queue.find(t => t.status === "waiting");
-  if (next) {
-    await apiUpdate(next.id, { status: "called", delayStartTime: Date.now() });
-    playCallSound();
-    haptic("heavy");
-  }
+  if (next) await apiUpdate(next.id, { status: "called" });
 }
 
 function subscribeQueue(cb) {
@@ -461,7 +393,7 @@ const S = `
   --teal:#2d7d7d;--teal-l:#e0f0f0;--teal-d:#1a5c5c;
   --cream:#f8f6f1;--sand:#e6e0d6;--txt:#1e1e1e;--soft:#777;--w:#fff;
   --amber:#d4832a;--amb-bg:#fef3e2;--green:#2e8b57;--gr-bg:#e8f5ee;
-  --red:#c0392b;--red-bg:#fdecea;--blue:#2471a3;--blue-l:#eaf2fb;--ease:cubic-bezier(.16,1,.3,1);
+  --red:#c0392b;--red-bg:#fdecea;--ease:cubic-bezier(.16,1,.3,1);
 }
 html,body{height:100%;background:var(--cream);color:var(--txt);-webkit-font-smoothing:antialiased}
 body.ar{font-family:'Tajawal',sans-serif}
@@ -598,72 +530,6 @@ body.en{font-family:'Tajawal',sans-serif}
 .pt-live{font-size:12px;color:var(--soft);display:flex;align-items:center;gap:6px;margin-top:8px}
 .pt-dot{width:7px;height:7px;border-radius:50%;background:var(--green);animation:blink 1.5s infinite}
 .pt-back{margin-top:24px;font-size:13px;color:var(--soft);background:none;border:none;cursor:pointer;text-decoration:underline;font-family:'Tajawal',sans-serif}
-
-/* DARK MODE */
-@media(prefers-color-scheme:dark){
-  :root{--cream:#1a1a2e;--sand:#2d2d44;--txt:#e8e8f0;--soft:#8888aa;--w:#12122a}
-  .add-input,.lfield input,.login-box{background:#12122a;color:#e8e8f0;border-color:#2d2d44}
-  .q-item{background:#12122a;border-color:#2d2d44}
-  .stat,.about-feat{background:#12122a;border-color:#2d2d44}
-  .topbar{background:linear-gradient(135deg,#0d1b2a,#1a3a5c)}
-}
-
-/* PROGRESS BAR */
-.queue-progress{height:4px;background:var(--sand);border-radius:2px;overflow:hidden;margin:0 12px 8px}
-.queue-progress-fill{height:100%;background:linear-gradient(90deg,var(--teal),var(--teal-m));border-radius:2px;transition:width .8s var(--ease)}
-
-/* NETWORK BADGE */
-.net-badge{
-  position:fixed;bottom:90px;left:50%;transform:translateX(-50%);
-  background:#c0392b;color:white;padding:6px 18px;border-radius:100px;
-  font-size:12px;font-weight:700;z-index:100;
-  animation:fadeUp .3s var(--ease);
-  font-family:'Tajawal',sans-serif;
-}
-
-/* PATIENT STATUS ANIMATIONS */
-.status-animate{animation:statusPop .5s var(--ease) both}
-@keyframes statusPop{
-  0%{transform:scale(.8);opacity:0}
-  60%{transform:scale(1.1)}
-  100%{transform:scale(1);opacity:1}
-}
-
-/* CALL FLASH */
-@keyframes callFlash{
-  0%,100%{box-shadow:0 0 0 0 rgba(212,131,42,.5)}
-  50%{box-shadow:0 0 0 16px rgba(212,131,42,0)}
-}
-.flash-called{animation:callFlash 1s ease-in-out 3}
-
-/* NOTES FIELD */
-.notes-input{
-  width:100%;padding:8px 12px;border-radius:8px;
-  border:1.5px solid var(--sand);background:var(--cream);
-  font-family:'Tajawal',sans-serif;font-size:12px;color:var(--txt);
-  outline:none;resize:none;
-  transition:border-color .2s;
-}
-.notes-input:focus{border-color:var(--teal)}
-
-/* STATS BAR */
-.stats-mini{
-  display:flex;gap:8px;padding:8px 12px;
-  background:var(--teal-d);
-  overflow-x:auto;scrollbar-width:none;
-}
-.stats-mini::-webkit-scrollbar{display:none}
-.stats-chip{
-  background:rgba(255,255,255,.12);
-  border-radius:100px;padding:4px 12px;
-  font-size:11px;color:rgba(255,255,255,.8);
-  white-space:nowrap;font-weight:600;flex-shrink:0;
-}
-.stats-chip span{color:white;font-weight:800}
-
-/* SMOOTH TRANSITIONS */
-.q-item{transition:all .3s var(--ease)}
-.pt-ring{transition:all .4s var(--ease)}
 
 @keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
 @keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(212,131,42,.2)}50%{box-shadow:0 0 0 8px rgba(212,131,42,0)}}
@@ -1013,18 +879,6 @@ function NurseView({ role, onLogout, lang, setLang }) {
   const [timeInput, setTimeInput] = useState(getVisitTimeForRole(role).toString());
   const [timeSaved, setTimeSaved] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
-  const [noteInput, setNoteInput] = useState("");
-  const [showNoteFor, setShowNoteFor] = useState(null);
-  const online = useNetworkStatus();
-
-  // Keep screen on for staff
-  useEffect(() => {
-    requestWakeLock();
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") requestWakeLock();
-    });
-    return () => releaseWakeLock();
-  }, []);
 
   const saveTime = () => {
     const v = parseInt(timeInput) || 15;
@@ -1076,7 +930,6 @@ function NurseView({ role, onLogout, lang, setLang }) {
       <style>{S}</style>
       <LangBar lang={lang} setLang={setLang} />
       {showAdmin && <AdminPanel lang={lang} onClose={() => setShowAdmin(false)} />}
-      {!online && <div className="net-badge">⚠️ {lang==="ar" ? "لا يوجد اتصال بالإنترنت" : "No internet connection"}</div>}
       <div className={`shell ${t.dir === "rtl" ? "rtl" : ""}`} dir={t.dir}>
         <div className="topbar">
           <div className="topbar-left">
@@ -1130,15 +983,6 @@ function NurseView({ role, onLogout, lang, setLang }) {
           <div className="stat s-w"><div className="stat-n">{waiting.length}</div><div className="stat-l">{t.waiting}</div></div>
           <div className="stat s-c"><div className="stat-n">{called ? 1 : 0}</div><div className="stat-l">{t.inProgress}</div></div>
           <div className="stat s-d"><div className="stat-n">{done.length}</div><div className="stat-l">{t.done}</div></div>
-        </div>
-
-        {/* Mini stats bar */}
-        <div className="stats-mini">
-          <div className="stats-chip">👥 {lang==="ar" ? "الكل" : "Total"}: <span>{queue.length}</span></div>
-          <div className="stats-chip">⏳ {lang==="ar" ? "انتظار" : "Waiting"}: <span>{waiting.length}</span></div>
-          <div className="stats-chip">✓ {lang==="ar" ? "أنهوا" : "Done"}: <span>{done.length}</span></div>
-          {called && <div className="stats-chip">🔔 {lang==="ar" ? "قيد الفحص" : "In progress"}: <span>{called.name}</span></div>}
-          {waiting.length > 0 && <div className="stats-chip">⏱️ {lang==="ar" ? "وقت انتظار تقريبي" : "Est. wait"}: <span>~{waiting.length * visitTime} min</span></div>}
         </div>
 
         <div className="nurse-body">
@@ -1236,21 +1080,13 @@ function PatientView({ initialCode, lang, setLang }) {
     return () => clearInterval(interval);
   }, []);
 
-  const prevStatus = useState(null);
   useEffect(() => {
     if (!code) return;
     const padded = code.padStart(3, "0");
     const tk = queue.find(q => q.code === padded);
     if (tk) {
       const pos = queue.filter(x => x.status === "waiting").findIndex(x => x.code === padded);
-      const newInfo = { ...tk, position: pos + 1 };
-      // Play sound + vibrate when status changes to "called"
-      if (tk.status === "called" && prevStatus[0] !== "called") {
-        playCallSound();
-        haptic("heavy");
-      }
-      prevStatus[1](tk.status);
-      setInfo(newInfo);
+      setInfo({ ...tk, position: pos + 1 });
       setError("");
     } else if (queue.length > 0) {
       setError(t.codeNotFound);
@@ -1347,9 +1183,6 @@ function PatientView({ initialCode, lang, setLang }) {
             <div className="pt-live">
               <div className="pt-dot"/>
               {t.autoUpdate}
-            </div>
-            <div style={{fontSize:11,color:"var(--soft)",marginTop:6}}>
-              🕐 {lang==="ar" ? "آخر تحديث: " : "Last update: "}{new Date().toLocaleTimeString("ar-DZ",{hour:"2-digit",minute:"2-digit"})}
             </div>
             <button className="pt-back" onClick={() => { setInfo(null); setCode(""); setInput(""); }}>{t.enterAnotherCode}</button>
           </div>
