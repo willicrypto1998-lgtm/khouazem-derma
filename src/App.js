@@ -1393,4 +1393,4 @@ export default function App() {
 
   // Logged in → dashboard (session saved, no need to re-login)
   return <NurseView role={role} onLogout={handleLogout} lang={lang} setLang={setLang} />;
-}}
+}
