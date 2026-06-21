@@ -36,6 +36,70 @@ function getVisitTimeForRole(roleId) {
 }
 
 // ══════════════════════════════════════════════════════════
+//  🔊 SOUND NOTIFICATION
+// ══════════════════════════════════════════════════════════
+function playCallSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const playBeep = (freq, start, dur) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = freq;
+      o.type = "sine";
+      g.gain.setValueAtTime(0, ctx.currentTime + start);
+      g.gain.linearRampToValueAtTime(0.3, ctx.currentTime + start + 0.01);
+      g.gain.linearRampToValueAtTime(0, ctx.currentTime + start + dur);
+      o.start(ctx.currentTime + start);
+      o.stop(ctx.currentTime + start + dur + 0.1);
+    };
+    playBeep(880, 0, 0.15);
+    playBeep(1100, 0.2, 0.15);
+    playBeep(1320, 0.4, 0.3);
+  } catch(e) {}
+}
+
+// ══════════════════════════════════════════════════════════
+//  📳 HAPTIC FEEDBACK
+// ══════════════════════════════════════════════════════════
+function haptic(type = "light") {
+  if (!navigator.vibrate) return;
+  if (type === "light") navigator.vibrate(50);
+  if (type === "medium") navigator.vibrate([50, 30, 50]);
+  if (type === "heavy") navigator.vibrate([100, 50, 100, 50, 200]);
+}
+
+// ══════════════════════════════════════════════════════════
+//  💡 WAKE LOCK (screen stays on for staff)
+// ══════════════════════════════════════════════════════════
+let wakeLock = null;
+async function requestWakeLock() {
+  try {
+    if ("wakeLock" in navigator) {
+      wakeLock = await navigator.wakeLock.request("screen");
+    }
+  } catch(e) {}
+}
+async function releaseWakeLock() {
+  try { if (wakeLock) { await wakeLock.release(); wakeLock = null; } } catch(e) {}
+}
+
+// ══════════════════════════════════════════════════════════
+//  🌐 NETWORK STATUS
+// ══════════════════════════════════════════════════════════
+function useNetworkStatus() {
+  const [online, setOnline] = useState(navigator.onLine);
+  useEffect(() => {
+    const on  = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+  }, []);
+  return online;
+}
+
+// ══════════════════════════════════════════════════════════
 //  ⚙️ ADMIN CONFIG (managed by Dr Khouazem only)
 // ══════════════════════════════════════════════════════════
 const ADMIN_CONFIG_KEY = "khouazem_admin_config";
@@ -204,6 +268,7 @@ const T = {
     autoUpdate: "Auto-updating in real time",
     enterAnotherCode: "← Enter another code",
     liveNow: "Live",
+    addDelay: "Extend time",
     visitTime: "Visit duration (min)",
     estimatedTime: "Estimated time",
     saveTime: "Save",
@@ -262,6 +327,7 @@ const T = {
     autoUpdate: "تحديث تلقائي في الوقت الفعلي",
     enterAnotherCode: "← إدخال رمز آخر",
     liveNow: "مباشر",
+    addDelay: "تمديد الوقت",
     visitTime: "مدة الزيارة (دقيقة)",
     estimatedTime: "الوقت المتوقع",
     saveTime: "حفظ",
@@ -328,11 +394,48 @@ async function apiUpdate(id, data) {
   await update(ref(db, `days/${todayKey()}/queue/${id}`), data);
 }
 
+// Add delay to currently called patient (in minutes)
+async function apiAddDelay(id, extraMins, queue) {
+  const t = queue.find(q => q.id === id);
+  if (!t) return;
+  const currentDelay = t.extraDelay || 0;
+  const newDelay = currentDelay + extraMins;
+  await apiUpdate(id, { extraDelay: newDelay, delayStartTime: t.delayStartTime || Date.now() });
+}
+
+// Real-time estimated time calculation
+function calcRealTime(position, visitTimeMins, calledTicket) {
+  const now = Date.now();
+  let remainingForCurrent = visitTimeMins * 60 * 1000; // default
+
+  if (calledTicket) {
+    const startTime = calledTicket.delayStartTime || now;
+    const extraMs = (calledTicket.extraDelay || 0) * 60 * 1000;
+    const elapsed = now - startTime;
+    const totalDuration = visitTimeMins * 60 * 1000 + extraMs;
+    remainingForCurrent = Math.max(0, totalDuration - elapsed);
+  }
+
+  // position 1 = next after current
+  const waitMs = remainingForCurrent + (position - 1) * visitTimeMins * 60 * 1000;
+  const eta = new Date(now + waitMs);
+  return eta.toLocaleTimeString("ar-DZ", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDelay(extraMins) {
+  if (!extraMins) return "";
+  return `+${extraMins} min`;
+}
+
 async function apiCallNext(queue) {
   const cur = queue.find(t => t.status === "called");
-  if (cur) await apiUpdate(cur.id, { status: "done" });
+  if (cur) await apiUpdate(cur.id, { status: "done", extraDelay: 0 });
   const next = queue.find(t => t.status === "waiting");
-  if (next) await apiUpdate(next.id, { status: "called" });
+  if (next) {
+    await apiUpdate(next.id, { status: "called", delayStartTime: Date.now() });
+    playCallSound();
+    haptic("heavy");
+  }
 }
 
 function subscribeQueue(cb) {
@@ -358,7 +461,7 @@ const S = `
   --teal:#2d7d7d;--teal-l:#e0f0f0;--teal-d:#1a5c5c;
   --cream:#f8f6f1;--sand:#e6e0d6;--txt:#1e1e1e;--soft:#777;--w:#fff;
   --amber:#d4832a;--amb-bg:#fef3e2;--green:#2e8b57;--gr-bg:#e8f5ee;
-  --red:#c0392b;--red-bg:#fdecea;--ease:cubic-bezier(.16,1,.3,1);
+  --red:#c0392b;--red-bg:#fdecea;--blue:#2471a3;--blue-l:#eaf2fb;--ease:cubic-bezier(.16,1,.3,1);
 }
 html,body{height:100%;background:var(--cream);color:var(--txt);-webkit-font-smoothing:antialiased}
 body.ar{font-family:'Tajawal',sans-serif}
@@ -391,6 +494,7 @@ body.en{font-family:'Tajawal',sans-serif}
 
 /* SHELL */
 .shell{min-height:100vh;display:flex;flex-direction:column;max-width:480px;margin:0 auto;background:var(--cream)}
+.desktop-side{display:none}
 .shell.rtl{direction:rtl}
 
 /* TOPBAR */
@@ -496,7 +600,173 @@ body.en{font-family:'Tajawal',sans-serif}
 .pt-dot{width:7px;height:7px;border-radius:50%;background:var(--green);animation:blink 1.5s infinite}
 .pt-back{margin-top:24px;font-size:13px;color:var(--soft);background:none;border:none;cursor:pointer;text-decoration:underline;font-family:'Tajawal',sans-serif}
 
+/* DARK MODE */
+@media(prefers-color-scheme:dark){
+  :root{--cream:#1a1a2e;--sand:#2d2d44;--txt:#e8e8f0;--soft:#8888aa;--w:#12122a}
+  .add-input,.lfield input,.login-box{background:#12122a;color:#e8e8f0;border-color:#2d2d44}
+  .q-item{background:#12122a;border-color:#2d2d44}
+  .stat,.about-feat{background:#12122a;border-color:#2d2d44}
+  .topbar{background:linear-gradient(135deg,#0d1b2a,#1a3a5c)}
+}
+
+/* PROGRESS BAR */
+.queue-progress{height:4px;background:var(--sand);border-radius:2px;overflow:hidden;margin:0 12px 8px}
+.queue-progress-fill{height:100%;background:linear-gradient(90deg,var(--teal),var(--teal-m));border-radius:2px;transition:width .8s var(--ease)}
+
+/* NETWORK BADGE */
+.net-badge{
+  position:fixed;bottom:90px;left:50%;transform:translateX(-50%);
+  background:#c0392b;color:white;padding:6px 18px;border-radius:100px;
+  font-size:12px;font-weight:700;z-index:100;
+  animation:fadeUp .3s var(--ease);
+  font-family:'Tajawal',sans-serif;
+}
+
+/* PATIENT STATUS ANIMATIONS */
+.status-animate{animation:statusPop .5s var(--ease) both}
+@keyframes statusPop{
+  0%{transform:scale(.8);opacity:0}
+  60%{transform:scale(1.1)}
+  100%{transform:scale(1);opacity:1}
+}
+
+/* CALL FLASH */
+@keyframes callFlash{
+  0%,100%{box-shadow:0 0 0 0 rgba(212,131,42,.5)}
+  50%{box-shadow:0 0 0 16px rgba(212,131,42,0)}
+}
+.flash-called{animation:callFlash 1s ease-in-out 3}
+
+/* NOTES FIELD */
+.notes-input{
+  width:100%;padding:8px 12px;border-radius:8px;
+  border:1.5px solid var(--sand);background:var(--cream);
+  font-family:'Tajawal',sans-serif;font-size:12px;color:var(--txt);
+  outline:none;resize:none;
+  transition:border-color .2s;
+}
+.notes-input:focus{border-color:var(--teal)}
+
+/* STATS BAR */
+.stats-mini{
+  display:flex;gap:8px;padding:8px 12px;
+  background:var(--teal-d);
+  overflow-x:auto;scrollbar-width:none;
+}
+.stats-mini::-webkit-scrollbar{display:none}
+.stats-chip{
+  background:rgba(255,255,255,.12);
+  border-radius:100px;padding:4px 12px;
+  font-size:11px;color:rgba(255,255,255,.8);
+  white-space:nowrap;font-weight:600;flex-shrink:0;
+}
+.stats-chip span{color:white;font-weight:800}
+
+/* SMOOTH TRANSITIONS */
+.q-item{transition:all .3s var(--ease)}
+.pt-ring{transition:all .4s var(--ease)}
+
+.pt-spinner{width:40px;height:40px;border:3px solid var(--sand);border-top-color:var(--teal);border-radius:50%;margin:0 auto;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 @keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+
+/* ══════════════════════════════════════════════════════════
+   🖥️  DESKTOP / PC LAYOUT (>= 769px)
+   ══════════════════════════════════════════════════════════ */
+@media (min-width:769px){
+  body{background:var(--sand)}
+
+  /* Center everything in a wide canvas, but keep inner shell readable */
+  .shell{
+    max-width:1180px;
+    margin:24px auto;
+    border-radius:24px;
+    overflow:hidden;
+    box-shadow:0 30px 80px rgba(13,26,30,.18);
+    min-height:calc(100vh - 48px);
+    display:grid;
+    grid-template-columns:380px 1fr;
+    grid-template-rows:auto auto auto 1fr;
+  }
+  .shell > .topbar{grid-column:1 / -1}
+  .shell > .firebase-banner{grid-column:1 / -1}
+  .shell > .called-banner{grid-column:1 / -1}
+  .shell > .stats{grid-column:1 / -1}
+  .shell > .nurse-body{
+    grid-column:1;
+    border-right:1px solid var(--sand);
+    padding-bottom:24px;
+    max-height:calc(100vh - 250px);
+  }
+  .shell > .bottom-action{
+    position:static;
+    transform:none;
+    max-width:none;
+    grid-column:1;
+    border-top:1px solid var(--sand);
+  }
+
+  /* Right-hand side panel: big live overview, visible only on desktop */
+  .desktop-side{
+    display:flex;
+    flex-direction:column;
+    gap:18px;
+    padding:24px;
+    background:var(--w);
+    overflow-y:auto;
+    max-height:calc(100vh - 250px);
+  }
+  .desktop-side-card{
+    background:var(--cream);
+    border:1px solid var(--sand);
+    border-radius:16px;
+    padding:20px;
+  }
+  .desktop-side-title{
+    font-size:11px;font-weight:800;text-transform:uppercase;
+    letter-spacing:.1em;color:var(--soft);margin-bottom:14px;
+  }
+  .desktop-current-patient{
+    display:flex;align-items:center;gap:16px;
+  }
+  .desktop-current-num{
+    width:64px;height:64px;border-radius:16px;
+    background:linear-gradient(135deg,var(--amber),#f9844a);
+    color:white;display:flex;align-items:center;justify-content:center;
+    font-family:'Cormorant Garamond',serif;font-size:26px;font-weight:700;flex-shrink:0;
+  }
+  .desktop-empty-state{
+    text-align:center;padding:30px 10px;color:var(--soft);
+  }
+  .desktop-next-list{display:flex;flex-direction:column;gap:8px}
+  .desktop-next-item{
+    display:flex;align-items:center;gap:10px;
+    background:var(--w);border:1px solid var(--sand);border-radius:10px;
+    padding:9px 12px;
+  }
+  .desktop-next-num{
+    width:30px;height:30px;border-radius:8px;background:var(--teal-l);
+    color:var(--teal-d);display:flex;align-items:center;justify-content:center;
+    font-weight:700;font-size:12px;flex-shrink:0;
+  }
+  .desktop-link-box{
+    margin-top:6px;background:var(--w);border:1.5px dashed var(--sand);
+    border-radius:10px;padding:12px;font-size:11px;color:var(--soft);
+    word-break:break-all;font-family:monospace;
+  }
+
+  /* Patient-facing view stays centered like a kiosk screen, slightly larger */
+  .pt-shell{
+    max-width:560px;margin:40px auto;border-radius:24px;overflow:hidden;
+    box-shadow:0 30px 80px rgba(13,26,30,.18);min-height:auto;
+  }
+  .pt-header{padding-top:40px}
+}
+
+@media (min-width:1300px){
+  .shell{max-width:1320px;grid-template-columns:420px 1fr}
+}
+
 @keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(212,131,42,.2)}50%{box-shadow:0 0 0 8px rgba(212,131,42,0)}}
 @keyframes ringPulse{0%,100%{box-shadow:0 0 0 0 rgba(212,131,42,.4)}50%{box-shadow:0 0 0 20px rgba(212,131,42,0)}}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
@@ -844,6 +1114,18 @@ function NurseView({ role, onLogout, lang, setLang }) {
   const [timeInput, setTimeInput] = useState(getVisitTimeForRole(role).toString());
   const [timeSaved, setTimeSaved] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
+  const [noteInput, setNoteInput] = useState("");
+  const [showNoteFor, setShowNoteFor] = useState(null);
+  const online = useNetworkStatus();
+
+  // Keep screen on for staff
+  useEffect(() => {
+    requestWakeLock();
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") requestWakeLock();
+    });
+    return () => releaseWakeLock();
+  }, []);
 
   const saveTime = () => {
     const v = parseInt(timeInput) || 15;
@@ -895,6 +1177,7 @@ function NurseView({ role, onLogout, lang, setLang }) {
       <style>{S}</style>
       <LangBar lang={lang} setLang={setLang} />
       {showAdmin && <AdminPanel lang={lang} onClose={() => setShowAdmin(false)} />}
+      {!online && <div className="net-badge">⚠️ {lang==="ar" ? "لا يوجد اتصال بالإنترنت" : "No internet connection"}</div>}
       <div className={`shell ${t.dir === "rtl" ? "rtl" : ""}`} dir={t.dir}>
         <div className="topbar">
           <div className="topbar-left">
@@ -923,10 +1206,24 @@ function NurseView({ role, onLogout, lang, setLang }) {
           <div className="called-banner">
             <span className="cb-icon">🔔</span>
             <div className="cb-info">
-              <div className="cb-label">{t.inProgress}</div>
+              <div className="cb-label">{t.inProgress} {called.extraDelay ? <span style={{background:"var(--red)",color:"white",borderRadius:100,padding:"1px 8px",fontSize:10,marginLeft:4}}>+{called.extraDelay} min</span> : null}</div>
               <div className="cb-patient">N° {called.code} — {called.name}</div>
+              <div style={{display:"flex",gap:6,marginTop:8}}>
+                <button onClick={() => apiAddDelay(called.id, 5, queue)}
+                  style={{background:"var(--amber)",color:"white",border:"none",borderRadius:8,padding:"5px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Tajawal',sans-serif"}}>
+                  {lang==="ar" ? "+5 دقائق" : "+5 min"}
+                </button>
+                <button onClick={() => apiAddDelay(called.id, 10, queue)}
+                  style={{background:"var(--amber)",color:"white",border:"none",borderRadius:8,padding:"5px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Tajawal',sans-serif"}}>
+                  {lang==="ar" ? "+10 دقائق" : "+10 min"}
+                </button>
+                <button onClick={() => apiAddDelay(called.id, 15, queue)}
+                  style={{background:"var(--red)",color:"white",border:"none",borderRadius:8,padding:"5px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Tajawal',sans-serif"}}>
+                  {lang==="ar" ? "+15 دقائق" : "+15 min"}
+                </button>
+              </div>
             </div>
-            <button className="cb-btn" onClick={() => apiUpdate(called.id, { status: "done" })}>✓ {t.done}</button>
+            <button className="cb-btn" onClick={() => apiUpdate(called.id, { status: "done", extraDelay: 0 })}>✓ {t.done}</button>
           </div>
         )}
 
@@ -934,6 +1231,15 @@ function NurseView({ role, onLogout, lang, setLang }) {
           <div className="stat s-w"><div className="stat-n">{waiting.length}</div><div className="stat-l">{t.waiting}</div></div>
           <div className="stat s-c"><div className="stat-n">{called ? 1 : 0}</div><div className="stat-l">{t.inProgress}</div></div>
           <div className="stat s-d"><div className="stat-n">{done.length}</div><div className="stat-l">{t.done}</div></div>
+        </div>
+
+        {/* Mini stats bar */}
+        <div className="stats-mini">
+          <div className="stats-chip">👥 {lang==="ar" ? "الكل" : "Total"}: <span>{queue.length}</span></div>
+          <div className="stats-chip">⏳ {lang==="ar" ? "انتظار" : "Waiting"}: <span>{waiting.length}</span></div>
+          <div className="stats-chip">✓ {lang==="ar" ? "أنهوا" : "Done"}: <span>{done.length}</span></div>
+          {called && <div className="stats-chip">🔔 {lang==="ar" ? "قيد الفحص" : "In progress"}: <span>{called.name}</span></div>}
+          {waiting.length > 0 && <div className="stats-chip">⏱️ {lang==="ar" ? "وقت انتظار تقريبي" : "Est. wait"}: <span>~{waiting.length * visitTime} min</span></div>}
         </div>
 
         <div className="nurse-body">
@@ -989,7 +1295,7 @@ function NurseView({ role, onLogout, lang, setLang }) {
               <div className="q-info">
                 <div className="q-name">{q.name}</div>
                 <div className={`q-meta ${q.status === "called" ? "mc" : ""}`}>
-                  {q.status === "waiting"  && `⏳ ${t.position} ${pos[q.id]} · ~${calcEstimatedTime(pos[q.id], visitTime)}`}
+                  {q.status === "waiting"  && `⏳ ${t.position} ${pos[q.id]} · ~${calcRealTime(pos[q.id], visitTime, called)}`}
                   {q.status === "called"   && t.inConsultation}
                   {q.status === "done"     && t.finished}
                   {q.status === "skipped"  && t.cancelled}
@@ -1001,6 +1307,72 @@ function NurseView({ role, onLogout, lang, setLang }) {
               </div>
             </div>
           ))}
+        </div>
+
+        {/* ══════════════════════════════════════════════
+            🖥️  DESKTOP-ONLY SIDE PANEL (hidden on mobile via CSS)
+            Shows a live overview: current patient, next in line,
+            and the last generated ticket link for quick copy/verify.
+            ══════════════════════════════════════════════ */}
+        <div className="desktop-side">
+          <div className="desktop-side-card">
+            <div className="desktop-side-title">
+              {lang === "ar" ? "المريض الحالي" : "Patient en cours"}
+            </div>
+            {called ? (
+              <div className="desktop-current-patient">
+                <div className="desktop-current-num">{called.code}</div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 16 }}>{called.name}</div>
+                  <div style={{ fontSize: 12, color: "var(--soft)", marginTop: 2 }}>
+                    {t.inConsultation}{called.extraDelay ? ` (+${called.extraDelay} min)` : ""}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="desktop-empty-state">
+                {lang === "ar" ? "لا يوجد مريض حالياً" : "Aucun patient en consultation"}
+              </div>
+            )}
+          </div>
+
+          <div className="desktop-side-card">
+            <div className="desktop-side-title">
+              {lang === "ar" ? "التالي في الطابور" : "Prochains dans la file"}
+            </div>
+            {waiting.length === 0 ? (
+              <div className="desktop-empty-state">{t.noPatients}</div>
+            ) : (
+              <div className="desktop-next-list">
+                {waiting.slice(0, 6).map((q, i) => (
+                  <div key={q.id} className="desktop-next-item">
+                    <div className="desktop-next-num">{q.code}</div>
+                    <div style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{q.name}</div>
+                    <div style={{ fontSize: 11, color: "var(--soft)" }}>
+                      ~{calcRealTime(i + 1, visitTime, called)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {last && (
+            <div className="desktop-side-card">
+              <div className="desktop-side-title">
+                {lang === "ar" ? "آخر تذكرة تم إنشاؤها" : "Dernier ticket généré"}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                <div className="desktop-current-num" style={{ width: 48, height: 48, fontSize: 18 }}>{last.code}</div>
+                <div style={{ fontWeight: 700 }}>{last.name}</div>
+              </div>
+              <div className="desktop-link-box">{patientLink(last.code)}</div>
+              <div className="t-share" style={{ marginTop: 10 }}>
+                <button className="t-wa" onClick={() => shareWA(last)}>{t.whatsapp}</button>
+                <button className="t-copy" onClick={() => copyLink(last)}>{copied ? t.copied : t.copy}</button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="bottom-action">
@@ -1019,29 +1391,58 @@ function NurseView({ role, onLogout, lang, setLang }) {
 function PatientView({ initialCode, lang, setLang }) {
   const t = T[lang];
   const queue = useQueue();
-  const [input, setInput] = useState(initialCode || "");
-  const [code, setCode]   = useState(initialCode || "");
-  const [info, setInfo]   = useState(null);
-  const [error, setError] = useState("");
+  const [input, setInput]     = useState(initialCode || "");
+  const [code, setCode]       = useState(initialCode || "");
+  const [info, setInfo]       = useState(null);
+  const [error, setError]     = useState("");
+  const [loading, setLoading] = useState(!!initialCode);
+  const [, setTick] = useState(0);
 
+  // Auto-refresh every 60 seconds to update ETA in real time
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // ✅ FIX: wait for Firebase to actually respond before declaring "not found".
+  // Give it up to 4 seconds (Firebase connection + first snapshot) before showing an error.
+  useEffect(() => {
+    if (!initialCode) return;
+    const timeout = setTimeout(() => setLoading(false), 4000);
+    return () => clearTimeout(timeout);
+  }, [initialCode]);
+
+  const prevStatusRef = useState(null);
   useEffect(() => {
     if (!code) return;
-    const padded = code.padStart(3, "0");
+    const padded = code.trim().padStart(3, "0");
     const tk = queue.find(q => q.code === padded);
     if (tk) {
+      setLoading(false);
       const pos = queue.filter(x => x.status === "waiting").findIndex(x => x.code === padded);
-      setInfo({ ...tk, position: pos + 1 });
+      const newInfo = { ...tk, position: pos + 1 };
+      if (tk.status === "called" && prevStatusRef[0] !== "called") {
+        playCallSound();
+        haptic("heavy");
+      }
+      prevStatusRef[1](tk.status);
+      setInfo(newInfo);
       setError("");
     } else if (queue.length > 0) {
+      // Only show "not found" once Firebase has actually loaded data AND code still doesn't match
+      setLoading(false);
       setError(t.codeNotFound);
     }
+    // If queue.length === 0, we are still waiting for Firebase — don't error out yet.
   }, [queue, code, t]);
 
   const confirm = () => {
     const padded = input.trim().padStart(3, "0");
-    const tk = queue.find(q => q.code === padded);
-    if (!tk) { setError(t.codeNotFound); return; }
+    if (!padded || padded === "000") { setError(t.codeNotFound); return; }
+    setLoading(true);
     setCode(padded);
+    // Give Firebase a moment, then stop the spinner even if nothing is found
+    setTimeout(() => setLoading(false), 4000);
   };
 
   const isTermine = info && (info.status === "done" || info.status === "skipped");
@@ -1058,7 +1459,19 @@ function PatientView({ initialCode, lang, setLang }) {
           <div className="pt-header-sub">{t.appSub}</div>
         </div>
 
-        {!info ? (
+        {loading && !info ? (
+          <div className="pt-entry">
+            <div className="pt-card" style={{textAlign:"center"}}>
+              <div className="pt-spinner"/>
+              <div className="pt-card-title" style={{marginTop:18}}>
+                {lang === "ar" ? "جاري التحقق من الرمز..." : "Vérification du code..."}
+              </div>
+              <div className="pt-card-sub">
+                {lang === "ar" ? "يرجى الانتظار للحظات" : "Veuillez patienter quelques instants"}
+              </div>
+            </div>
+          </div>
+        ) : !info ? (
           <div className="pt-entry">
             <div className="pt-card">
               <div className="pt-card-title">{t.yourTurn}</div>
@@ -1098,7 +1511,12 @@ function PatientView({ initialCode, lang, setLang }) {
                 {info.position > 0 && (
                   <div style={{background:"var(--teal-l)",borderRadius:12,padding:"12px 20px",textAlign:"center",marginBottom:12,border:"1px solid var(--teal)"}}>
                     <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:".08em",color:"var(--teal-d)",fontWeight:700,marginBottom:4}}>⏱️ {t.estimatedTime}</div>
-                    <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:700,color:"var(--teal-d)"}}>{calcEstimatedTime(info.position, loadVisitTime())}</div>
+                    <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:32,fontWeight:700,color:"var(--teal-d)"}} id="eta-display">
+                      {calcRealTime(info.position, loadVisitTime(), queue.find(q => q.status === "called"))}
+                    </div>
+                    <div style={{fontSize:10,color:"var(--teal-d)",opacity:.6,marginTop:4}}>
+                      {lang==="ar" ? "🔴 مباشر · يتحدث كل دقيقة" : "🔴 Live · Updates every minute"}
+                    </div>
                   </div>
                 )}
               </>
@@ -1122,6 +1540,9 @@ function PatientView({ initialCode, lang, setLang }) {
             <div className="pt-live">
               <div className="pt-dot"/>
               {t.autoUpdate}
+            </div>
+            <div style={{fontSize:11,color:"var(--soft)",marginTop:6}}>
+              🕐 {lang==="ar" ? "آخر تحديث: " : "Last update: "}{new Date().toLocaleTimeString("ar-DZ",{hour:"2-digit",minute:"2-digit"})}
             </div>
             <button className="pt-back" onClick={() => { setInfo(null); setCode(""); setInput(""); }}>{t.enterAnotherCode}</button>
           </div>
