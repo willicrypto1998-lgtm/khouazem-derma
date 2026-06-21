@@ -600,14 +600,7 @@ body.en{font-family:'Tajawal',sans-serif}
 .pt-dot{width:7px;height:7px;border-radius:50%;background:var(--green);animation:blink 1.5s infinite}
 .pt-back{margin-top:24px;font-size:13px;color:var(--soft);background:none;border:none;cursor:pointer;text-decoration:underline;font-family:'Tajawal',sans-serif}
 
-/* DARK MODE */
-@media(prefers-color-scheme:dark){
-  :root{--cream:#1a1a2e;--sand:#2d2d44;--txt:#e8e8f0;--soft:#8888aa;--w:#12122a}
-  .add-input,.lfield input,.login-box{background:#12122a;color:#e8e8f0;border-color:#2d2d44}
-  .q-item{background:#12122a;border-color:#2d2d44}
-  .stat,.about-feat{background:#12122a;border-color:#2d2d44}
-  .topbar{background:linear-gradient(135deg,#0d1b2a,#1a3a5c)}
-}
+/* Dark mode auto-switch removed — app always keeps its original colors */
 
 /* PROGRESS BAR */
 .queue-progress{height:4px;background:var(--sand);border-radius:2px;overflow:hidden;margin:0 12px 8px}
@@ -1156,17 +1149,42 @@ function NurseView({ role, onLogout, lang, setLang }) {
     return `${base}?ticket=${code}&lang=${lang}`;
   };
 
+  // ✅ FIX: window.open() must be called synchronously on click, not after
+  // an async/await, otherwise mobile/desktop browsers silently block the popup
+  // and nothing visibly happens when staff taps "WhatsApp".
   const shareWA = (tk) => {
+    if (!tk || !tk.code) return;
+    const link = patientLink(tk.code);
     const msg = lang === "ar"
-      ? `السلام عليكم ${tk.name} 👋\n\nرقم دورك في عيادة *د. خوازم*:\n\n🎫 رقمك: *${tk.code}*\n\n📱 تابع دورك من هنا:\n${patientLink(tk.code)}\n\nشكراً 🙏`
-      : `Hello ${tk.name} 👋\n\nYour queue number at *Dr Khouazem - Dr Benlamri*:\n\n🎫 Your number: *${tk.code}*\n\n📱 Track your turn here:\n${patientLink(tk.code)}\n\nThank you 🙏`;
-    window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
+      ? `السلام عليكم ${tk.name} 👋\n\nرقم دورك في عيادة *د. خوازم*:\n\n🎫 رقمك: *${tk.code}*\n\n📱 تابع دورك من هنا:\n${link}\n\nشكراً 🙏`
+      : `Hello ${tk.name} 👋\n\nYour queue number at *Dr Khouazem - Dr Benlamri*:\n\n🎫 Your number: *${tk.code}*\n\n📱 Track your turn here:\n${link}\n\nThank you 🙏`;
+    const waUrl = `https://wa.me/?text=${encodeURIComponent(msg)}`;
+    const win = window.open(waUrl, "_blank");
+    // Fallback if the popup was blocked: redirect current tab instead of doing nothing
+    if (!win || win.closed || typeof win.closed === "undefined") {
+      window.location.href = waUrl;
+    }
   };
 
   const copyLink = (tk) => {
-    navigator.clipboard.writeText(patientLink(tk.code));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (!tk || !tk.code) return;
+    const link = patientLink(tk.code);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }).catch(() => {
+        // Fallback for older browsers / permission issues
+        const ta = document.createElement("textarea");
+        ta.value = link;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      });
+    }
   };
 
   const pos = {};
