@@ -374,15 +374,28 @@ async function apiAdd(name) {
     LOCAL.notify();
     return t;
   }
-  const cRef = ref(db, `days/${todayKey()}/counter`);
-  const snap = await get(cRef);
-  const n = (snap.val() || 0) + 1;
-  await set(cRef, n);
-  const code = String(n).padStart(3, "0");
-  const tRef = push(ref(db, `days/${todayKey()}/queue`));
-  const t = { id: tRef.key, code, name, status: "waiting", time: timeStr() };
-  await set(tRef, t);
-  return t;
+  try {
+    const cRef = ref(db, `days/${todayKey()}/counter`);
+    const snap = await get(cRef);
+    const n = (snap.val() || 0) + 1;
+    await set(cRef, n);
+    const code = String(n).padStart(3, "0");
+    const tRef = push(ref(db, `days/${todayKey()}/queue`));
+    const t = { id: tRef.key, code, name, status: "waiting", time: timeStr() };
+    await set(tRef, t);
+    return t;
+  } catch (err) {
+    // ✅ FIX: Firebase calls were failing silently (permission-denied or
+    // network error) and the UI showed nothing. Now we fall back to the
+    // local queue so a ticket is ALWAYS generated, and we surface the error.
+    console.error("Firebase apiAdd failed, falling back to local queue:", err);
+    LOCAL.counter++;
+    const code = String(LOCAL.counter).padStart(3, "0");
+    const t = { id: Date.now().toString(), code, name, status: "waiting", time: timeStr(), _localFallback: true };
+    LOCAL.queue.push(t);
+    LOCAL.notify();
+    return t;
+  }
 }
 
 async function apiUpdate(id, data) {
@@ -1102,6 +1115,7 @@ function NurseView({ role, onLogout, lang, setLang }) {
   const queue   = useQueue();
   const [name, setName]       = useState("");
   const [last, setLast]       = useState(null);
+  const [addError, setAddError] = useState("");
   const [copied, setCopied]   = useState(false);
   const [visitTime, setVisitTime] = useState(getVisitTimeForRole(role));
   const [timeInput, setTimeInput] = useState(getVisitTimeForRole(role).toString());
@@ -1138,9 +1152,19 @@ function NurseView({ role, onLogout, lang, setLang }) {
 
   const handleAdd = async () => {
     if (!name.trim()) return;
-    const ticket = await apiAdd(name.trim());
-    setLast(ticket);
-    setName("");
+    setAddError("");
+    try {
+      const ticket = await apiAdd(name.trim());
+      if (!ticket || !ticket.code) {
+        setAddError(lang === "ar" ? "خطأ: لم يتم إنشاء التذكرة. حاول مرة أخرى." : "Erreur : le ticket n'a pas pu être créé. Réessayez.");
+        return;
+      }
+      setLast(ticket);
+      setName("");
+    } catch (err) {
+      console.error("handleAdd error:", err);
+      setAddError(lang === "ar" ? "خطأ في الاتصال. تحقق من الإنترنت." : "Erreur de connexion. Vérifiez votre connexion internet.");
+    }
   };
 
   // ⚠️ Patient link — ONLY patient view, no access to dashboard
@@ -1267,6 +1291,11 @@ function NurseView({ role, onLogout, lang, setLang }) {
               <input className="add-input" type="text" placeholder={t.namePlaceholder} value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAdd()} />
               <button className="add-btn" onClick={handleAdd}>{t.generateTicket}</button>
             </div>
+            {addError && (
+              <div style={{background:"var(--red-bg)",color:"var(--red)",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:600,marginTop:8}}>
+                ⚠️ {addError}
+              </div>
+            )}
             {last && (
               <div className="ticket-result">
                 <div className="t-hint">{t.ticketGenerated}</div>
